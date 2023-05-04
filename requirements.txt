@@ -1,0 +1,9 @@
+torch
+torchvision
+tensorflow
+tensorflow-datasets
+pillow
+pathlib
+tqdm
+
+-e .
