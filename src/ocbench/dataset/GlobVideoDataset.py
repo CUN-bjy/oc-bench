@@ -9,6 +9,7 @@ from PIL import Image, ImageFile
 from torchvision import transforms
 from torch.utils.data import Dataset
 import torchvision.utils as vutils
+import argparse
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from ocbench.dataset import DATASET_PATH
@@ -72,3 +73,16 @@ class GlobVideoDataset(Dataset):
             video += [tensor_image]
         video = torch.stack(video, dim=0)
         return video
+
+if __name__=="__main__":
+    
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--level', default='A', choices=["A", "B", "C", "D", "E"])
+    parser.add_argument('--image_size', type=int, default=128)
+    parser.add_argument('--ep_len', type=int, default=3)
+    
+    args = parser.parse_args()
+    
+    train_dataset = GlobVideoDataset(level=args.level, phase='train', img_size=args.image_size, ep_len=args.ep_len, img_glob='????????_image.png')
+    val_dataset = GlobVideoDataset(level=args.level, phase='val', img_size=args.image_size, ep_len=args.ep_len, img_glob='????????_image.png')
