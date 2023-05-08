@@ -1,19 +1,15 @@
+# modifed from https://github.com/a-imamshah/savi-pytorch
+
 from typing import Tuple
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from utils import Tensor
-from utils import assert_shape
-from utils import build_grid
-from utils import conv_transpose_out_shape
-
-from torch import linalg as LA
-
-from params import SAViParams
-params = SAViParams()
-
+from ocbench.savi.utils import Tensor
+from ocbench.savi.utils import assert_shape
+from ocbench.savi.utils import build_grid
+from ocbench.savi.utils import conv_transpose_out_shape
 
 
 class Corrector(nn.Module):
@@ -137,9 +133,9 @@ class SAViModel(nn.Module):
         in_channels: int = 3,
         kernel_size: int = 5,
         slot_size: int = 128,
-        hidden_dims: Tuple[int, ...] = params.hidden_dims,
-        decoder_hidden_dims: Tuple[int, ...] = params.decoder_hidden_dims,
-        decoder_resolution: Tuple[int, int] = (8, 8),
+        hidden_dims: Tuple[int, ...] = (32, 32, 32, 32),
+        decoder_hidden_dims: Tuple[int, ...] = (128,64,64,64),
+        decoder_resolution: Tuple[int, int] = (16, 16),
         empty_cache=False,
     ):
         super().__init__()
@@ -203,7 +199,7 @@ class SAViModel(nn.Module):
                 )
             )
             out_size = conv_transpose_out_shape(out_size, 2, 2, 5, 1)
-            
+        
         assert_shape(
             resolution,
             (out_size, out_size),

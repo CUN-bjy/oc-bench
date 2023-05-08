@@ -1,3 +1,5 @@
+# modified from https://github.com/a-imamshah/savi-pytorch
+
 from typing import Any
 from typing import Tuple
 from typing import TypeVar
@@ -5,9 +7,6 @@ from typing import Union
 from torchvision import utils as vutils
 
 import torch
-from pytorch_lightning import Callback
-
-import wandb
 
 Tensor = TypeVar("torch.tensor")
 T = TypeVar("T")
@@ -48,17 +47,6 @@ def only(x):
     materialized_x = list(x)
     assert len(materialized_x) == 1
     return materialized_x[0]
-
-
-class ImageLogCallback(Callback):
-    def on_validation_epoch_end(self, trainer, pl_module):
-        """Called when the train epoch ends."""
-
-        if trainer.logger:
-            with torch.no_grad():
-                pl_module.eval()
-                images = pl_module.sample_images()
-                trainer.logger.experiment.log({"images": [wandb.Image(images)]}, commit=False)
 
 
 def to_rgb_from_tensor(x: Tensor):

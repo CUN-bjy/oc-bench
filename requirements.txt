@@ -1,7 +1,9 @@
 torch
 torchvision
 tensorflow
+tensorboard
 tensorflow-datasets
+protobuf
 pillow
 pathlib
 tqdm
