@@ -5,5 +5,6 @@ tensorflow-datasets
 pillow
 pathlib
 tqdm
+moviepy
 
 -e .

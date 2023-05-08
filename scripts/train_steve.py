@@ -18,6 +18,7 @@ from datetime import datetime
 from ocbench.steve.steve import STEVE
 from ocbench.dataset.GlobVideoDataset import GlobVideoDataset
 from ocbench.steve.utils import cosine_anneal, linear_warmup
+from tqdm import tqdm
 
 
 def visualize(video, recon_dvae, recon_tf, attns, N=8):
@@ -41,16 +42,36 @@ def visualize(video, recon_dvae, recon_tf, attns, N=8):
 
     return frames
 
-def train(model, optimizer, writer, train_loader, val_loader):
+def train(args, model, optimizer, writer, train_loader, val_loader):
+    
+    if os.path.isfile(args.checkpoint_path):
+        checkpoint = torch.load(args.checkpoint_path, map_location='cpu')
+        start_epoch = checkpoint['epoch']
+        best_val_loss = checkpoint['best_val_loss']
+        best_epoch = checkpoint['best_epoch']
+        model.load_state_dict(checkpoint['model'])
+    else:
+        checkpoint = None
+        start_epoch = 0
+        best_val_loss = math.inf
+        best_epoch = 0
+    
+    if checkpoint is not None:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        
     train_epoch_size = len(train_loader)
     val_epoch_size = len(val_loader)
 
     log_interval = train_epoch_size // 5
     
-    for epoch in range(start_epoch, args.epochs):
+    for epoch in range(start_epoch, args.epochs if not args.debug else 5):
         model.train()
         
-        for batch, video in enumerate(train_loader):
+        # Train Phase!
+        train_iterator = tqdm(
+            enumerate(train_loader), total=len(train_loader), desc="training"
+        )
+        for batch, video in train_iterator:
             global_step = epoch * train_epoch_size + batch
 
             tau = cosine_anneal(
@@ -110,6 +131,9 @@ def train(model, optimizer, writer, train_loader, val_loader):
                     writer.add_scalar('TRAIN/lr_enc', optimizer.param_groups[1]['lr'], global_step)
                     writer.add_scalar('TRAIN/lr_dec', optimizer.param_groups[2]['lr'], global_step)
 
+            if args.debug:
+                break
+
         with torch.no_grad():
             gen_video = (model.module if args.use_dp else model).reconstruct_autoregressive(video[:8])
             frames = visualize(video, recon, gen_video, attns, N=8)
@@ -117,11 +141,14 @@ def train(model, optimizer, writer, train_loader, val_loader):
         
         with torch.no_grad():
             model.eval()
-
+            # Eval Phase!
             val_cross_entropy = 0.
             val_mse = 0.
-
-            for batch, video in enumerate(val_loader):
+            
+            val_iterator = tqdm(
+                        enumerate(val_loader), total=len(val_loader), desc="testing"
+                    )
+            for batch, video in val_iterator:
                 video = video.cuda()
 
                 (recon, cross_entropy, mse, attns) = model(video, tau, args.hard)
@@ -132,6 +159,9 @@ def train(model, optimizer, writer, train_loader, val_loader):
 
                 val_cross_entropy += cross_entropy.item()
                 val_mse += mse.item()
+                
+                if args.debug:
+                    break
 
             val_cross_entropy /= (val_epoch_size)
             val_mse /= (val_epoch_size)
@@ -171,6 +201,7 @@ def train(model, optimizer, writer, train_loader, val_loader):
             torch.save(checkpoint, os.path.join(log_dir, 'checkpoint.pt.tar'))
 
             print('====> Best Loss = {:F} @ Epoch {}'.format(best_val_loss, best_epoch))
+        
 
 
 if __name__=="__main__":
@@ -217,7 +248,10 @@ if __name__=="__main__":
 
     parser.add_argument('--hard', action='store_true')
     parser.add_argument('--use_dp', default=True, action='store_true')
+    
+    parser.add_argument('--debug', default=False, action='store_true')
 
+    
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -245,17 +279,6 @@ if __name__=="__main__":
 
     model = STEVE(args)
 
-    if os.path.isfile(args.checkpoint_path):
-        checkpoint = torch.load(args.checkpoint_path, map_location='cpu')
-        start_epoch = checkpoint['epoch']
-        best_val_loss = checkpoint['best_val_loss']
-        best_epoch = checkpoint['best_epoch']
-        model.load_state_dict(checkpoint['model'])
-    else:
-        checkpoint = None
-        start_epoch = 0
-        best_val_loss = math.inf
-        best_epoch = 0
 
     model = model.cuda()
     if args.use_dp:
@@ -267,10 +290,8 @@ if __name__=="__main__":
         {'params': (x[1] for x in model.named_parameters() if 'steve_decoder' in x[0]), 'lr': 0.0},
     ])
 
-    if checkpoint is not None:
-        optimizer.load_state_dict(checkpoint['optimizer'])
 
     # start to train STEVE
-    train(model, optimizer, writer, train_loader, val_loader)
+    train(args, model, optimizer, writer, train_loader, val_loader)
     
     writer.close()
