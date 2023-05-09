@@ -52,13 +52,13 @@ def visualize(video, recon_combined, recons, N=8):
     for t in range(T):
         video_t = video[:N, t, None, :, :, :]
         recon_combined_t = recon_combined[:N, t, None, :, :, :]
-        recons_t = recons[:N, t, :, :, :, :]
-
+        recons_t = recons[:N, :, t, :, :, :]
+        
         # tile
         tiles = torch.cat((video_t, recon_combined_t, recons_t), dim=1).flatten(end_dim=1)
 
         # grid
-        frame = vutils.make_grid(tiles, nrow=(args.num_slots + 3), pad_value=0.8)
+        frame = vutils.make_grid(tiles, nrow=(args.num_slots + 2), pad_value=0.8)
         frames += [frame]
 
     frames = torch.stack(frames, dim=0).unsqueeze(0)
@@ -104,11 +104,13 @@ def train(args, model, writer, train_loader, val_loader):
             global_step = epoch * train_epoch_size + batch
 
             video = video.cuda()
+            B, T, C, H, W = video.size()
             
             optimizer.zero_grad()
             
             recon_combined, recons, masks, slots_all = model(video)
-            mse = F.mse_loss(recon_combined, video)
+            mse = ((recon_combined - video)**2).sum() / (B*T)
+            
             if args.use_dp:
                 mse = mse.mean()
             
@@ -145,7 +147,7 @@ def train(args, model, writer, train_loader, val_loader):
                 video = video.cuda()
                 
                 recon_combined, recons, masks, slots_all = model(video)
-                mse = F.mse_loss(recon_combined, video)
+                mse = ((recon_combined - video)**2).sum() / (B*T)
                 if args.use_dp:
                     mse = mse.mean()
 
