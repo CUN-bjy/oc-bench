@@ -224,9 +224,8 @@ if __name__ == "__main__":
     parser.add_argument('--decay_steps_pct', type=float, default=0.2)
     parser.add_argument('--video_mode', type=bool, default=True)
     
-
-    parser.add_argument('--decoder_hidden_dims', type=Tuple[int, ...], default=(128,64,64,64))
-    parser.add_argument('--hidden_dims', type=Tuple[int, ...], default=(32,32,32,32))
+    parser.add_argument('--hidden_dims', type=Tuple[int, ...], default=(64, 64, 64, 64))
+    parser.add_argument('--decoder_hidden_dims', type=Tuple[int, ...], default=(64, 64, 64, 64))
     
     parser.add_argument('--use_dp', default=True, action='store_true')
     parser.add_argument('--debug', default=False, action='store_true')

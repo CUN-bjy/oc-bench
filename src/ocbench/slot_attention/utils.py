@@ -1,10 +1,9 @@
-# modified from https://github.com/a-imamshah/savi-pytorch
+# modified from https://github.com/untitled-ai/slot_attention
 
 from typing import Any
 from typing import Tuple
 from typing import TypeVar
 from typing import Union
-from torchvision import utils as vutils
 
 import torch
 
@@ -65,36 +64,3 @@ def only(x):
 
 def to_rgb_from_tensor(x: Tensor):
     return (x * 0.5 + 0.5).clamp(0, 1)
-
-
-def sample_images_inference(model, datamodule, params, image_id):
-    dl = datamodule.val_dataloader()
-
-    idx = [image_id]
-    batch = next(iter(dl))[idx]
-    if params.gpus > 0:
-        batch = batch.cuda()
-    recon_combined, recons, masks, slots, attns = model.forward(batch)
-
-    print(slots.shape)
-
-    # combine images in a nice way so we can display all outputs in one grid, output rescaled to be between 0 and 1
-    out = to_rgb_from_tensor(
-        torch.cat(
-            [
-                batch.unsqueeze(1),  # original images
-                recon_combined.unsqueeze(1),  # reconstructions
-                recons * masks + (1 - masks),  # each slot
-            ],
-            dim=1,
-        )
-    )
-
-    batch_size, num_slots, nFrames, C, H, W = recons.shape
-    images = vutils.make_grid(
-        out.view(nFrames * out.shape[1], C, H, W).cpu(),
-        normalize=False,
-        nrow=nFrames,
-    )  # Assuming nSamples is 1, or do out - out[0] and out.shape[0]
-
-    return images, attns, slots

@@ -15,15 +15,20 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 from ocbench.dataset import DATASET_PATH
 from tqdm import tqdm
 
+
 def downloadMoviDataset(path_to_download, level, size, phase):
-    ds, ds_info = tfds.load(f"movi_{level}/{size}x{size}:1.0.0", data_dir="gs://kubric-public/tfds", with_info=True)
+    ds, ds_info = tfds.load(
+        f"movi_{level}/{size}x{size}:1.0.0",
+        data_dir="gs://kubric-public/tfds",
+        with_info=True,
+    )
     train_iter = iter(tfds.as_numpy(ds[phase]))
-        
+
     to_tensor = transforms.ToTensor()
 
     b = 0
     for record in train_iter:
-        video = record['video']
+        video = record["video"]
         T, *_ = video.shape
 
         # setup dirs
@@ -39,15 +44,16 @@ def downloadMoviDataset(path_to_download, level, size, phase):
 
 
 class GlobVideoDataset(Dataset):
-    def __init__(self, level, phase, img_size, ep_len=3, img_glob='*.png'):
-        
-        self.root = os.path.join(DATASET_PATH, f"movi_{level}", f"{img_size}x{img_size}", f"{phase}")
+    def __init__(self, level, phase, img_size, ep_len=3, img_glob="*.png"):
+        self.root = os.path.join(
+            DATASET_PATH, f"movi_{level}", f"{img_size}x{img_size}", f"{phase}"
+        )
         if not os.path.exists(self.root):
             downloadMoviDataset(self.root, level, img_size, phase)
         self.img_size = img_size
-        self.total_dirs = sorted(glob.glob(self.root+"/*"))
+        self.total_dirs = sorted(glob.glob(self.root + "/*"))
         self.ep_len = ep_len
-        
+
         # chunk into episodes
         self.episodes = []
         for dir in self.total_dirs:
@@ -74,15 +80,27 @@ class GlobVideoDataset(Dataset):
         video = torch.stack(video, dim=0)
         return video
 
-if __name__=="__main__":
-    
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--level', default='A', choices=["A", "B", "C", "D", "E"])
-    parser.add_argument('--image_size', type=int, default=128)
-    parser.add_argument('--ep_len', type=int, default=3)
-    
+    parser.add_argument("--level", default="A", choices=["A", "B", "C", "D", "E"])
+    parser.add_argument("--image_size", type=int, default=128)
+    parser.add_argument("--ep_len", type=int, default=3)
+
     args = parser.parse_args()
-    
-    train_dataset = GlobVideoDataset(level=args.level, phase='train', img_size=args.image_size, ep_len=args.ep_len, img_glob='????????_image.png')
-    val_dataset = GlobVideoDataset(level=args.level, phase='validation', img_size=args.image_size, ep_len=args.ep_len, img_glob='????????_image.png')
+
+    train_dataset = GlobVideoDataset(
+        level=args.level,
+        phase="train",
+        img_size=args.image_size,
+        ep_len=args.ep_len,
+        img_glob="????????_image.png",
+    )
+    val_dataset = GlobVideoDataset(
+        level=args.level,
+        phase="validation",
+        img_size=args.image_size,
+        ep_len=args.ep_len,
+        img_glob="????????_image.png",
+    )
