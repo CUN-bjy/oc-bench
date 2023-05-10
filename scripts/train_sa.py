@@ -295,6 +295,7 @@ if __name__ == "__main__":
         num_iterations=args.num_iterations,
         empty_cache=args.empty_cache,
         hidden_dims=tuple(args.hidden_dims),
+        slot_size=args.slot_size,
     )
     model = model.cuda()
     if args.use_dp:

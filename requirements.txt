@@ -1,9 +1,9 @@
 torch
 torchvision
-tensorflow
+protobuf
 tensorboard
 tensorflow-datasets
-protobuf
+tensorflow==2.12.0
 pillow
 pathlib
 tqdm
