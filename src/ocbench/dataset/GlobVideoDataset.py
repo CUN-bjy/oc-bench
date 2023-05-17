@@ -22,29 +22,32 @@ def downloadMoviDataset(path_to_download, level, size, phase):
         data_dir="gs://kubric-public/tfds",
         with_info=True,
     )
-    train_iter = iter(tfds.as_numpy(ds[phase]))
+    train_iter = tqdm(tfds.as_numpy(ds[phase]))
 
     to_tensor = transforms.ToTensor()
+    to_pil =  transforms.ToPILImage()
 
     b = 0
     for record in train_iter:
         video = record["video"]
+        mask = record["segmentations"]
         T, *_ = video.shape
+        T, *_ = mask.shape
 
         # setup dirs
         path_vid = os.path.join(path_to_download, f"{b:08}")
         os.makedirs(path_vid, exist_ok=True)
 
-        for t in tqdm(range(T)):
-            img = video[t]
-            img = to_tensor(img)
+        for t in range(T):
+            img = to_tensor(video[t])
             vutils.save_image(img, os.path.join(path_vid, f"{t:08}_image.png"))
+            msk = to_tensor(mask[t])
+            msk = to_pil(msk).convert('I').save(os.path.join(path_vid, f"{t:08}_mask.png"))
 
         b += 1
 
-
 class GlobVideoDataset(Dataset):
-    def __init__(self, level, phase, img_size, ep_len=3, img_glob="*.png"):
+    def __init__(self, level, phase, img_size, ep_len=3, img_glob="*_image.png"):
         self.root = os.path.join(
             DATASET_PATH, f"movi_{level}", f"{img_size}x{img_size}", f"{phase}"
         )
@@ -60,7 +63,8 @@ class GlobVideoDataset(Dataset):
             frame_buffer = []
             image_paths = sorted(glob.glob(os.path.join(dir, img_glob)))
             for path in image_paths:
-                frame_buffer.append(path)
+                mpath = path[:-len('image.png')] + "mask.png"
+                frame_buffer.append((path, mpath))
                 if len(frame_buffer) == self.ep_len:
                     self.episodes.append(frame_buffer)
                     frame_buffer = []
@@ -72,13 +76,21 @@ class GlobVideoDataset(Dataset):
 
     def __getitem__(self, idx):
         video = []
-        for img_loc in self.episodes[idx]:
+        masks = []
+        for img_loc, msk_loc in self.episodes[idx]:
             image = Image.open(img_loc).convert("RGB")
             image = image.resize((self.img_size, self.img_size))
             tensor_image = self.transform(image)
+            
+            mask = Image.open(msk_loc).convert("I")
+            mask = mask.resize((self.img_size, self.img_size))
+            tensor_mask = self.transform(mask)
+            
             video += [tensor_image]
+            masks += [tensor_mask]
         video = torch.stack(video, dim=0)
-        return video
+        masks = torch.stack(masks, dim=0)
+        return {'video': video, 'masks': masks}
 
 
 if __name__ == "__main__":
@@ -95,12 +107,10 @@ if __name__ == "__main__":
         phase="train",
         img_size=args.image_size,
         ep_len=args.ep_len,
-        img_glob="????????_image.png",
     )
     val_dataset = GlobVideoDataset(
         level=args.level,
         phase="validation",
         img_size=args.image_size,
         ep_len=args.ep_len,
-        img_glob="????????_image.png",
     )

@@ -14,7 +14,7 @@ def adjusted_rand_index(true_mask, pred_mask, exclude_background=True):
     Returns: ari [N]
     """
     N, _, H, W = true_mask.shape
-    max_num_entities = 11
+    max_num_entities = 20
 
     true_group_ids = true_mask.view(N, H * W).long()
     true_mask_oh = torch.nn.functional.one_hot(true_group_ids).float()

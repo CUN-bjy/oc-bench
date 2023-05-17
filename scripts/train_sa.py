@@ -4,7 +4,6 @@ import argparse
 
 import torch
 import torchvision.utils as vutils
-from torch.nn import functional as F
 
 from torch.optim import Adam, lr_scheduler
 from torch.utils.data import DataLoader
@@ -16,8 +15,8 @@ from datetime import datetime
 from ocbench.slot_attention.model import SlotAttentionModel
 from ocbench.dataset.GlobVideoDataset import GlobVideoDataset
 from tqdm import tqdm
-from typing import Tuple
 
+from ocbench.evaluator import adjusted_rand_index
 
 def configure_optimizers(args, model, train_size):
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -104,17 +103,17 @@ def train(args, model, writer, train_loader, val_loader):
         train_iterator = tqdm(
             enumerate(train_loader), total=len(train_loader), desc="training"
         )
-        for batch, video in train_iterator:
-            global_step = epoch * train_epoch_size + batch
-
-            video = video.cuda()
-            input = video[:, 0, :, :, :]
-            B, C, H, W = input.size()
+        for i, batch_data in train_iterator:
+            global_step = epoch * train_epoch_size + i
+            video = batch_data['video']
+            
+            image = video[:, 0, :, :, :].cuda()
+            B, C, H, W = image.size()
 
             optimizer.zero_grad()
 
-            recon_combined, recons, masks, slots = model(input)
-            mse = ((recon_combined - input) ** 2).sum() / B
+            recon_combined, recons, _, _ = model(image)
+            mse = ((recon_combined - image) ** 2).sum() / B
 
             if args.use_dp:
                 mse = mse.mean()
@@ -126,10 +125,10 @@ def train(args, model, writer, train_loader, val_loader):
             scheduler.step()
 
             with torch.no_grad():
-                if batch % log_interval == 0:
+                if i % log_interval == 0:
                     print(
                         "Train Epoch: {:3} [{:5}/{:5}] \t Loss: {:F} \t MSE: {:F}".format(
-                            epoch + 1, batch, train_epoch_size, loss.item(), loss.item()
+                            epoch + 1, i, train_epoch_size, loss.item(), loss.item()
                         )
                     )
 
@@ -143,28 +142,35 @@ def train(args, model, writer, train_loader, val_loader):
                 break
 
         with torch.no_grad():
-            frames = visualize(input, recon_combined, recons, N=8)
+            frames = visualize(image, recon_combined, recons, N=8)
             writer.add_video("TRAIN_recons/epoch={:03}".format(epoch + 1), frames)
 
         with torch.no_grad():
             model.eval()
             val_mse = 0.0
+            ari_log = []
+            fgari_log = []
             # Eval Phase!
             val_iterator = tqdm(
                 enumerate(val_loader), total=len(val_loader), desc="testing"
             )
-            for batch, video in val_iterator:
-                video = video.cuda()
-                input = video[:, 0, :, :, :]
-                B, C, H, W = input.size()
+            for i, batch_data in val_iterator:
+                video = batch_data['video']
+                gt_masks = batch_data['masks'].cuda()
+                image = video[:, 0, :, :, :].cuda()
+                B, C, H, W = image.size()
 
-                recon_combined, recons, masks, slots = model(input)
-                mse = ((recon_combined - input) ** 2).sum() / B
+                recon_combined, recons, pred_masks, _ = model(image)
+                mse = ((recon_combined - image) ** 2).sum() / B
 
+                ari = adjusted_rand_index(gt_masks, pred_masks)
+                fgari = adjusted_rand_index(gt_masks[:, 1:], pred_masks)
+                ari_log.append(torch.mean(ari))
+                fgari_log.append(torch.mean(fgari))
+                
                 if args.use_dp:
                     mse = mse.mean()
 
-                loss = mse
                 val_mse += loss.item()
 
                 if args.debug:
@@ -173,11 +179,15 @@ def train(args, model, writer, train_loader, val_loader):
             val_mse /= val_epoch_size
 
             val_loss = val_mse
+            val_ari = torch.mean(torch.stack(ari_log))
+            val_fgari = torch.mean(torch.stack(fgari_log))
 
             writer.add_scalar("VAL/loss", val_loss, epoch + 1)
             writer.add_scalar("VAL/mse", val_mse, epoch + 1)
+            writer.add_scalar("VAL/ARI", val_ari, epoch + 1)
+            writer.add_scalar("VAL/FG-ARI", val_fgari, epoch + 1)
 
-            print("====> Epoch: {:3} \t Loss = {:F}".format(epoch + 1, val_loss))
+            print("====> Epoch: {:3} \t Loss = {:F} \t ARI = {:F} \t FG-ARI = {:F}".format(epoch + 1, val_loss, val_ari, val_fgari))
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_epoch = epoch + 1
@@ -198,7 +208,7 @@ def train(args, model, writer, train_loader, val_loader):
                     )
 
                 if 10 <= epoch:
-                    frames = visualize(video, recon_combined, recons, N=8)
+                    frames = visualize(image, recon_combined, recons, N=8)
                     writer.add_video("VAL_recons/epoch={:03}".format(epoch + 1), frames)
 
             writer.add_scalar("VAL/best_loss", best_val_loss, epoch + 1)
@@ -268,14 +278,12 @@ if __name__ == "__main__":
         phase="train",
         img_size=args.image_size,
         ep_len=1,
-        img_glob="????????_image.png",
     )
     val_dataset = GlobVideoDataset(
         level=args.level,
         phase="validation",
         img_size=args.image_size,
         ep_len=1,
-        img_glob="????????_image.png",
     )
 
     loader_kwargs = {
