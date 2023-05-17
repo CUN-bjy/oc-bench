@@ -160,3 +160,6 @@ cython_debug/
 #.idea/
 .python-version
 logs/*
+*movi_A*
+*.tfrecords
+*.hdf5

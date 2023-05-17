@@ -1,3 +1,4 @@
+gsutil
 torch
 torchvision
 protobuf
