@@ -163,3 +163,4 @@ logs/*
 *movi_A*
 *.tfrecords
 *.hdf5
+wandb/*

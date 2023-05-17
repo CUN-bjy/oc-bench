@@ -2,6 +2,8 @@ import math
 import os.path
 import argparse
 
+import wandb
+
 import torch
 import torchvision.utils as vutils
 
@@ -195,7 +197,7 @@ def train(args, model, writer, train_loader, val_loader):
 
                 torch.save(
                     model.module.state_dict() if args.use_dp else model.state_dict(),
-                    os.path.join(log_dir, "best_model.pt"),
+                    os.path.join(args.log_path, "best_model.pt"),
                 )
 
                 if global_step < args.steps:
@@ -204,7 +206,7 @@ def train(args, model, writer, train_loader, val_loader):
                         if args.use_dp
                         else model.state_dict(),
                         os.path.join(
-                            log_dir, f"best_model_until_{args.steps}_steps.pt"
+                            args.log_path, f"best_model_until_{args.steps}_steps.pt"
                         ),
                     )
 
@@ -224,54 +226,18 @@ def train(args, model, writer, train_loader, val_loader):
                 "optimizer": optimizer.state_dict(),
             }
 
-            torch.save(checkpoint, os.path.join(log_dir, "checkpoint.pt.tar"))
+            torch.save(checkpoint, os.path.join(args.log_path, "checkpoint.pt.tar"))
             print("====> Best Loss = {:F} @ Epoch {}".format(best_val_loss, best_epoch))
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--seed", type=int, default=0)
-
-    parser.add_argument("--checkpoint_path", default="checkpoint.pt.tar")
-    parser.add_argument("--log_path", default="logs/")
-
-    parser.add_argument(
-        "--level", type=str, default="A", choices=["A", "B", "C", "D", "E"]
-    )
-    parser.add_argument("--img_channels", type=int, default=3)
-    parser.add_argument("--image_size", type=int, default=128)
-
-    parser.add_argument("--lr", type=float, default=4e-4)
-    parser.add_argument("--batch_size", type=int, default=24)
-    parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--num_slots", type=int, default=5)
-    parser.add_argument("--num_iterations", type=int, default=3)
-    parser.add_argument("--max_epochs", type=int, default=10)
-    parser.add_argument("--steps", type=int, default=200000)
-    parser.add_argument("--scheduler_gamma", type=float, default=0.5)
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-
-    parser.add_argument("--empty_cache", type=bool, default=True)
-    parser.add_argument("--is_logger_enabled", type=bool, default=True)
-    parser.add_argument("--is_verbose", type=bool, default=True)
-    parser.add_argument("--n_samples", type=int, default=5)
-    parser.add_argument("--warmup_steps_pct", type=float, default=0.02)
-    parser.add_argument("--decay_steps_pct", type=float, default=0.2)
-    parser.add_argument("--hidden_dims", nargs='+', type=int, default=(64, 64, 64, 64))
-    parser.add_argument("--slot_size", type=int, default=64)
-
-    parser.add_argument("--use_dp", default=True, action="store_true")
-    parser.add_argument("--debug", default=False, action="store_true")
-
-    args = parser.parse_args()
-
+def main(args):
+    
     torch.manual_seed(args.seed)
 
     arg_str_list = ["{}={}".format(k, v) for k, v in vars(args).items()]
     arg_str = "__".join(arg_str_list)
-    log_dir = os.path.join(args.log_path, datetime.today().isoformat())
-    writer = SummaryWriter(log_dir)
+    args.log_path = os.path.join(args.log_path, f"{datetime.today()}-{args.prefix}-{args.seed}")
+    writer = SummaryWriter(args.log_path)
     writer.add_text("hparams", arg_str)
 
     train_dataset = GlobVideoDataset(
@@ -311,3 +277,79 @@ if __name__ == "__main__":
         model = DP(model)
 
     train(args, model, writer, train_loader, val_loader)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--prefix", type=str, default="sa-movia")
+    parser.add_argument("--seed", type=int, default=0)
+
+    parser.add_argument("--checkpoint_path", default="checkpoint.pt.tar")
+    parser.add_argument("--log_path", default="logs/")
+
+    parser.add_argument(
+        "--level", type=str, default="A", choices=["A", "B", "C", "D", "E"]
+    )
+    parser.add_argument("--img_channels", type=int, default=3)
+    parser.add_argument("--image_size", type=int, default=128)
+
+    parser.add_argument("--lr", type=float, default=4e-4)
+    parser.add_argument("--batch_size", type=int, default=24)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_slots", type=int, default=5)
+    parser.add_argument("--num_iterations", type=int, default=3)
+    parser.add_argument("--max_epochs", type=int, default=15)
+    parser.add_argument("--steps", type=int, default=200000)
+    parser.add_argument("--scheduler_gamma", type=float, default=0.5)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
+
+    parser.add_argument("--empty_cache", type=bool, default=True)
+    parser.add_argument("--is_logger_enabled", type=bool, default=True)
+    parser.add_argument("--is_verbose", type=bool, default=True)
+    parser.add_argument("--n_samples", type=int, default=5)
+    parser.add_argument("--warmup_steps_pct", type=float, default=0.02)
+    parser.add_argument("--decay_steps_pct", type=float, default=0.2)
+    parser.add_argument("--hidden_dims", nargs='+', type=int, default=(64, 64, 64, 64))
+    parser.add_argument("--slot_size", type=int, default=64)
+
+    parser.add_argument("--use_dp", default=True, action="store_true")
+    parser.add_argument("--debug", default=False, action="store_true")
+
+    args = parser.parse_args()
+
+
+
+    def _create_prefix(args: dict):
+        assert (
+            args["prefix"] is not None and args["prefix"] != ""
+        ), "Must specify a prefix to use W&B"
+        d = datetime.today()
+        date_id = f"{d.month}{d.day}{d.hour}{d.minute}{d.second}"
+        before = f"{date_id}-{args['seed']}-"
+
+        if args["prefix"] != "debug" and args["prefix"] != "NONE":
+            prefix = before + args["prefix"]
+            print("Assigning full prefix %s" % prefix)
+        else:
+            prefix = args["prefix"]
+
+        return prefix
+
+
+    prefix_args = {
+        "prefix": args.prefix,
+        "seed": args.seed,
+    }
+    
+    wandb.init(
+        name=_create_prefix(prefix_args),
+        project="sa-flex",
+        entity="cun_bjy",
+        sync_tensorboard=True,  
+    )
+
+    wandb.config.update(args)
+
+
+    main(args)
