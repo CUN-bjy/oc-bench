@@ -156,15 +156,16 @@ def train(args, model, writer, train_loader, val_loader):
             )
             for i, batch_data in val_iterator:
                 video = batch_data['video']
-                gt_masks = batch_data['masks'].cuda()
                 image = video[:, 0, :, :, :].cuda()
+                gt_masks = batch_data['masks']
+                gt_masks = gt_masks[:, 0, :, :, :].cuda()
                 B, C, H, W = image.size()
 
                 recon_combined, recons, pred_masks, _ = model(image)
                 mse = ((recon_combined - image) ** 2).sum() / B
 
-                ari = adjusted_rand_index(gt_masks, pred_masks)
-                fgari = adjusted_rand_index(gt_masks[:, 1:], pred_masks)
+                ari = adjusted_rand_index(gt_masks, pred_masks, exclude_background=False)
+                fgari = adjusted_rand_index(gt_masks, pred_masks, )
                 ari_log.append(torch.mean(ari))
                 fgari_log.append(torch.mean(fgari))
                 
