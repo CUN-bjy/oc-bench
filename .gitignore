@@ -161,6 +161,8 @@ cython_debug/
 .python-version
 logs/*
 *movi_A*
+*movi_C*
+*movi_D*
 *.tfrecords
 *.hdf5
 wandb/*
