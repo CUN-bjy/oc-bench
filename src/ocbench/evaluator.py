@@ -13,15 +13,20 @@ def adjusted_rand_index(true_mask, pred_mask, exclude_background=True):
     pred_mask: FloatTensor of shape [N, K, 1, H, W]  (mask probs)
     Returns: ari [N]
     """
-    N, _, H, W = true_mask.shape
+    N, _, _, H, W = true_mask.shape
     max_num_entities = 20
 
+    # take argmax across slots for true masks
+    true_mask = true_mask.squeeze(2) # [N, K, H, W]
+    true_groups = true_mask.shape[1]
+    true_mask = torch.argmax(true_mask, dim=1) # [N, H, W]
     true_group_ids = true_mask.view(N, H * W).long()
-    true_mask_oh = torch.nn.functional.one_hot(true_group_ids).float()
+    true_mask_oh = torch.nn.functional.one_hot(true_group_ids, true_groups).float()
+    
     # exclude background
     if exclude_background:
         true_mask_oh[...,0] = 0
-
+        
     # take argmax across slots for predicted masks
     pred_mask = pred_mask.squeeze(2)  # [N, K, H, W]
     pred_groups = pred_mask.shape[1]

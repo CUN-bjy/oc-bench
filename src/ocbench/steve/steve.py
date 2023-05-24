@@ -306,13 +306,13 @@ class STEVE(nn.Module):
         )  # slots: B, T, num_slots, slot_size
         # attns: B, T, num_slots, num_inputs
 
-        attns = (
+        masks = (
             attns.transpose(-1, -2)
             .reshape(B, T, self.num_slots, 1, H_enc, W_enc)
             .repeat_interleave(H // H_enc, dim=-2)
             .repeat_interleave(W // W_enc, dim=-1)
         )  # B, T, num_slots, 1, H, W
-        attns = video.unsqueeze(2) * attns + (1.0 - attns)  # B, T, num_slots, C, H, W
+        recons = video.unsqueeze(2) * masks + (1.0 - masks)  # B, T, num_slots, C, H, W
 
         # decode
         slots = self.steve_encoder.slot_proj(slots)  # B, T, num_slots, d_model
@@ -322,7 +322,7 @@ class STEVE(nn.Module):
         pred = self.steve_decoder.head(pred)  # B * T, H_enc * W_enc, vocab_size
         cross_entropy = -(z_hard * torch.log_softmax(pred, dim=-1)).sum() / (B * T)  # 1
 
-        return (dvae_recon.clamp(0.0, 1.0), cross_entropy, dvae_mse, attns)
+        return (dvae_recon.clamp(0.0, 1.0), cross_entropy, dvae_mse, recons, masks)
 
     def encode(self, video):
         B, T, C, H, W = video.size()

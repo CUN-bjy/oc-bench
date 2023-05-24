@@ -4,8 +4,10 @@ import math
 import os.path
 import argparse
 
+import wandb
 import torch
 import torchvision.utils as vutils
+from torchvision import transforms
 
 from torch.optim import Adam
 from torch.nn import DataParallel as DP
@@ -17,7 +19,10 @@ from datetime import datetime
 
 from ocbench.steve.steve import STEVE
 from ocbench.dataset.GlobVideoDataset import GlobVideoDataset
+
+from ocbench.dataset import ClevrWithMasks, DATASET_PATH
 from ocbench.steve.utils import cosine_anneal, linear_warmup
+from ocbench.evaluator import adjusted_rand_index
 from tqdm import tqdm
 
 
@@ -73,8 +78,8 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
         train_iterator = tqdm(
             enumerate(train_loader), total=len(train_loader), desc="training"
         )
-        for batch, video in train_iterator:
-            global_step = epoch * train_epoch_size + batch
+        for i, batch_data in train_iterator:
+            global_step = epoch * train_epoch_size + i
 
             tau = cosine_anneal(
                 global_step, args.tau_start, args.tau_final, 0, args.tau_steps
@@ -98,11 +103,13 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
                 lr_decay_factor * lr_warmup_factor_dec * args.lr_dec
             )
 
-            video = video.cuda()
+            images = batch_data["image"].cuda()
+            video = images.unsqueeze(1)
+            B, T, C, H, W = video.size()
 
             optimizer.zero_grad()
 
-            (recon, cross_entropy, mse, attns) = model(video, tau, args.hard)
+            (recon, cross_entropy, mse, recons, masks) = model(video, tau, args.hard)
 
             if args.use_dp:
                 mse = mse.mean()
@@ -115,10 +122,10 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
             optimizer.step()
 
             with torch.no_grad():
-                if batch % log_interval == 0:
+                if i % log_interval == 0:
                     print(
                         "Train Epoch: {:3} [{:5}/{:5}] \t Loss: {:F} \t MSE: {:F}".format(
-                            epoch + 1, batch, train_epoch_size, loss.item(), mse.item()
+                            epoch + 1, i, train_epoch_size, loss.item(), mse.item()
                         )
                     )
 
@@ -146,7 +153,7 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
             gen_video = (
                 model.module if args.use_dp else model
             ).reconstruct_autoregressive(video[:8])
-            frames = visualize(video, recon, gen_video, attns, N=8)
+            frames = visualize(video, recon, gen_video, recons, N=8)
             writer.add_video("TRAIN_recons/epoch={:03}".format(epoch + 1), frames)
 
         with torch.no_grad():
@@ -154,14 +161,29 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
             # Eval Phase!
             val_cross_entropy = 0.0
             val_mse = 0.0
+            ari_log = []
+            fgari_log = []
 
             val_iterator = tqdm(
                 enumerate(val_loader), total=len(val_loader), desc="testing"
             )
-            for batch, video in val_iterator:
-                video = video.cuda()
+            for i, batch_data in val_iterator:
+                images = batch_data["image"].cuda()
+                gt_masks = batch_data["mask"].cuda()
 
-                (recon, cross_entropy, mse, attns) = model(video, tau, args.hard)
+                video = images.unsqueeze(1)
+                B, T, C, H, W = video.size()
+
+                (recon, cross_entropy, mse, recons, masks) = model(
+                    video, tau, args.hard
+                )
+
+                ari = adjusted_rand_index(
+                    gt_masks, masks.squeeze(1), exclude_background=False
+                )
+                fgari = adjusted_rand_index(gt_masks, masks.squeeze(1))
+                ari_log.append(torch.mean(ari))
+                fgari_log.append(torch.mean(fgari))
 
                 if args.use_dp:
                     mse = mse.mean()
@@ -177,12 +199,20 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
             val_mse /= val_epoch_size
 
             val_loss = val_mse + val_cross_entropy
+            val_ari = torch.mean(torch.stack(ari_log))
+            val_fgari = torch.mean(torch.stack(fgari_log))
 
             writer.add_scalar("VAL/loss", val_loss, epoch + 1)
             writer.add_scalar("VAL/cross_entropy", val_cross_entropy, epoch + 1)
             writer.add_scalar("VAL/mse", val_mse, epoch + 1)
+            writer.add_scalar("VAL/ARI", val_ari, epoch + 1)
+            writer.add_scalar("VAL/FG-ARI", val_fgari, epoch + 1)
 
-            print("====> Epoch: {:3} \t Loss = {:F}".format(epoch + 1, val_loss))
+            print(
+                "====> Epoch: {:3} \t Loss = {:F} \t ARI = {:F} \t FG-ARI = {:F}".format(
+                    epoch + 1, val_loss, val_ari, val_fgari
+                )
+            )
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -190,7 +220,7 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
 
                 torch.save(
                     model.module.state_dict() if args.use_dp else model.state_dict(),
-                    os.path.join(log_dir, "best_model.pt"),
+                    os.path.join(args.log_path, "best_model.pt"),
                 )
 
                 if global_step < args.steps:
@@ -199,7 +229,7 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
                         if args.use_dp
                         else model.state_dict(),
                         os.path.join(
-                            log_dir, f"best_model_until_{args.steps}_steps.pt"
+                            args.log_path, f"best_model_until_{args.steps}_steps.pt"
                         ),
                     )
 
@@ -207,7 +237,7 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
                     gen_video = (
                         model.module if args.use_dp else model
                     ).reconstruct_autoregressive(video[:8])
-                    frames = visualize(video, recon, gen_video, attns, N=8)
+                    frames = visualize(video, recon, gen_video, recons, N=8)
                     writer.add_video("VAL_recons/epoch={:03}".format(epoch + 1), frames)
 
             writer.add_scalar("VAL/best_loss", best_val_loss, epoch + 1)
@@ -222,83 +252,52 @@ def train(args, model, optimizer, writer, train_loader, val_loader):
                 "optimizer": optimizer.state_dict(),
             }
 
-            torch.save(checkpoint, os.path.join(log_dir, "checkpoint.pt.tar"))
+            torch.save(checkpoint, os.path.join(args.log_path, "checkpoint.pt.tar"))
 
             print("====> Best Loss = {:F} @ Epoch {}".format(best_val_loss, best_epoch))
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--batch_size", type=int, default=24)
-    parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument(
-        "--level", type=str, default="A", choices=["A", "B", "C", "D", "E"]
-    )
-    parser.add_argument("--image_size", type=int, default=128)
-    parser.add_argument("--img_channels", type=int, default=3)
-    parser.add_argument("--ep_len", type=int, default=3)
-
-    parser.add_argument("--checkpoint_path", default="checkpoint.pt.tar")
-    parser.add_argument("--log_path", default="logs/")
-
-    parser.add_argument("--lr_dvae", type=float, default=3e-4)
-    parser.add_argument("--lr_enc", type=float, default=1e-4)
-    parser.add_argument("--lr_dec", type=float, default=3e-4)
-    parser.add_argument("--lr_warmup_steps", type=int, default=30000)
-    parser.add_argument("--lr_half_life", type=int, default=250000)
-    parser.add_argument("--clip", type=float, default=0.05)
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--steps", type=int, default=200000)
-
-    parser.add_argument("--num_iterations", type=int, default=2)
-    parser.add_argument("--num_slots", type=int, default=15)
-    parser.add_argument("--cnn_hidden_size", type=int, default=64)
-    parser.add_argument("--slot_size", type=int, default=192)
-    parser.add_argument("--mlp_hidden_size", type=int, default=192)
-    parser.add_argument("--num_predictor_blocks", type=int, default=1)
-    parser.add_argument("--num_predictor_heads", type=int, default=4)
-    parser.add_argument("--predictor_dropout", type=int, default=0.0)
-
-    parser.add_argument("--vocab_size", type=int, default=4096)
-    parser.add_argument("--num_decoder_blocks", type=int, default=8)
-    parser.add_argument("--num_decoder_heads", type=int, default=4)
-    parser.add_argument("--d_model", type=int, default=192)
-    parser.add_argument("--dropout", type=int, default=0.1)
-
-    parser.add_argument("--tau_start", type=float, default=1.0)
-    parser.add_argument("--tau_final", type=float, default=0.1)
-    parser.add_argument("--tau_steps", type=int, default=30000)
-
-    parser.add_argument("--hard", action="store_true")
-    parser.add_argument("--use_dp", default=True, action="store_true")
-
-    parser.add_argument("--debug", default=False, action="store_true")
-
-    args = parser.parse_args()
-
+def main(args):
     torch.manual_seed(args.seed)
 
     arg_str_list = ["{}={}".format(k, v) for k, v in vars(args).items()]
     arg_str = "__".join(arg_str_list)
-    log_dir = os.path.join(args.log_path, datetime.today().isoformat())
-    writer = SummaryWriter(log_dir)
+    args.log_path = os.path.join(args.log_path, f"{datetime.today()}-{args.prefix}-{args.seed}")
+    writer = SummaryWriter(args.log_path)
     writer.add_text("hparams", arg_str)
 
-    train_dataset = GlobVideoDataset(
-        level=args.level,
-        phase="train",
-        img_size=args.image_size,
-        ep_len=args.ep_len,
-        img_glob="????????_image.png",
+    training_transforms = {
+        "image": transforms.Compose(
+            [
+                transforms.CenterCrop(192),
+                transforms.Resize(128, transforms.InterpolationMode.NEAREST),
+                transforms.ConvertImageDtype(torch.float32),
+            ]
+        ),
+        "mask": transforms.Compose(
+            [
+                transforms.CenterCrop(192),
+                transforms.Resize(128, transforms.InterpolationMode.NEAREST),
+                transforms.ConvertImageDtype(torch.float32),
+            ]
+        ),
+    }
+
+    train_dataset = ClevrWithMasks(
+        root=DATASET_PATH,
+        split="Train",
+        ttv=[90000, 5000, 5000],
+        transforms=training_transforms,
+        download=True,
+        convert=True,
     )
-    val_dataset = GlobVideoDataset(
-        level=args.level,
-        phase="validation",
-        img_size=args.image_size,
-        ep_len=args.ep_len,
-        img_glob="????????_image.png",
+    val_dataset = ClevrWithMasks(
+        root=DATASET_PATH,
+        split="Val",
+        ttv=[90000, 5000, 5000],
+        transforms=training_transforms,
+        download=True,
+        convert=True,
     )
 
     loader_kwargs = {
@@ -343,3 +342,88 @@ if __name__ == "__main__":
     train(args, model, optimizer, writer, train_loader, val_loader)
 
     writer.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--prefix", type=str, default="sa-clevr-n5")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--batch_size", type=int, default=24)
+    parser.add_argument("--num_workers", type=int, default=4)
+    # parser.add_argument(
+    #     "--level", type=str, default="A", choices=["A", "B", "C", "D", "E"]
+    # )
+    parser.add_argument("--image_size", type=int, default=128)
+    parser.add_argument("--img_channels", type=int, default=3)
+    parser.add_argument("--ep_len", type=int, default=1)
+
+    parser.add_argument("--checkpoint_path", default="checkpoint.pt.tar")
+    parser.add_argument("--log_path", default="logs/")
+
+    parser.add_argument("--lr_dvae", type=float, default=3e-4)
+    parser.add_argument("--lr_enc", type=float, default=1e-4)
+    parser.add_argument("--lr_dec", type=float, default=3e-4)
+    parser.add_argument("--lr_warmup_steps", type=int, default=30000)
+    parser.add_argument("--lr_half_life", type=int, default=250000)
+    parser.add_argument("--clip", type=float, default=0.05)
+    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--steps", type=int, default=200000)
+
+    parser.add_argument("--num_iterations", type=int, default=2)
+    parser.add_argument("--num_slots", type=int, default=15)
+    parser.add_argument("--cnn_hidden_size", type=int, default=64)
+    parser.add_argument("--slot_size", type=int, default=192)
+    parser.add_argument("--mlp_hidden_size", type=int, default=192)
+    parser.add_argument("--num_predictor_blocks", type=int, default=1)
+    parser.add_argument("--num_predictor_heads", type=int, default=4)
+    parser.add_argument("--predictor_dropout", type=int, default=0.0)
+
+    parser.add_argument("--vocab_size", type=int, default=4096)
+    parser.add_argument("--num_decoder_blocks", type=int, default=8)
+    parser.add_argument("--num_decoder_heads", type=int, default=4)
+    parser.add_argument("--d_model", type=int, default=192)
+    parser.add_argument("--dropout", type=int, default=0.1)
+
+    parser.add_argument("--tau_start", type=float, default=1.0)
+    parser.add_argument("--tau_final", type=float, default=0.1)
+    parser.add_argument("--tau_steps", type=int, default=30000)
+
+    parser.add_argument("--hard", action="store_true")
+    parser.add_argument("--use_dp", default=True, action="store_true")
+
+    parser.add_argument("--debug", default=False, action="store_true")
+
+    args = parser.parse_args()
+
+    def _create_prefix(args: dict):
+        assert (
+            args["prefix"] is not None and args["prefix"] != ""
+        ), "Must specify a prefix to use W&B"
+        d = datetime.today()
+        date_id = f"{d.month}{d.day}{d.hour}{d.minute}{d.second}"
+        before = f"{date_id}-{args['seed']}-"
+
+        if args["prefix"] != "debug" and args["prefix"] != "NONE":
+            prefix = before + args["prefix"]
+            print("Assigning full prefix %s" % prefix)
+        else:
+            prefix = args["prefix"]
+
+        return prefix
+
+    prefix_args = {
+        "prefix": args.prefix,
+        "seed": args.seed,
+    }
+
+    wandb.init(
+        name=_create_prefix(prefix_args),
+        project="sa-flex",
+        entity="cun_bjy",
+        sync_tensorboard=True,
+    )
+
+    wandb.config.update(args)
+
+    main(args)
